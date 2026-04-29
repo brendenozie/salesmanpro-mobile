@@ -1,0 +1,112 @@
+# ===============================
+# Android / Gradle
+# ===============================
+.gradle/
+build/
+*/build/
+captures/
+
+# Local configuration file (SDK path, etc)
+local.properties
+
+# Gradle files
+.gradle-cache/
+.gradle-wrapper/
+
+# ===============================
+# Android Studio / IntelliJ
+# ===============================
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+
+# Android Studio generated
+.navigation/
+.lint/
+lint-results.xml
+lint-results.html
+lint-results.sarif
+lint-results.txt
+
+# ===============================
+# APK / AAB outputs
+# ===============================
+*.apk
+*.ap_
+*.aab
+
+# ===============================
+# Dex & Class files
+# ===============================
+*.dex
+*.class
+
+# ===============================
+# Generated files
+# ===============================
+bin/
+gen/
+out/
+
+# ===============================
+# Log files
+# ===============================
+*.log
+
+# ===============================
+# Signing keys (VERY IMPORTANT)
+# ===============================
+*.jks
+*.keystore
+key.properties
+
+# ===============================
+# Firebase / Google Services
+# ===============================
+google-services.json
+firebase.json
+*.firebase
+
+# ===============================
+# Native build
+# ===============================
+.externalNativeBuild/
+.cxx/
+
+# ===============================
+# Emulator / Device files
+# ===============================
+*.hprof
+*.pid
+
+# ===============================
+# OS-specific
+# ===============================
+.DS_Store
+Thumbs.db
+
+# ===============================
+# Kotlin
+# ===============================
+.kotlin/
+
+# ===============================
+# Fastlane (if used)
+# ===============================
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# ===============================
+# VS Code (if used)
+# ===============================
+.vscode/
+
+# ===============================
+# Temporary / Backup
+# ===============================
+*~
+*.swp
