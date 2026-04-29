@@ -1,6 +1,5 @@
 package site.salesmanpro.android
 
-import MainWebViewScreen
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -33,6 +32,8 @@ import androidx.compose.ui.platform.LocalContext
 // Import your service (adjust if the folder path is different)
 import site.salesmanpro.android.hardware.bluetooth.BluetoothPrinterService
 import site.salesmanpro.android.ui.screens.BluetoothScannerScreen
+import site.salesmanpro.android.ui.screens.MainWebViewScreen
+//import site.salesmanpro.android.ui.screens.MainWebViewScreen
 import site.salesmanpro.android.ui.viewmodels.BluetoothViewModel
 import site.salesmanpro.android.webbridge.WebAppInterface
 
