@@ -1,66 +1,36 @@
 package site.salesmanpro.android.ui.screens
 
-import android.webkit.*
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.viewinterop.AndroidView
-import site.salesmanpro.android.webbridge.WebAppInterface
+// --------------------------------
 import android.graphics.Bitmap
 import android.os.Build
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.ui.Alignment
-import androidx.compose.material3.Icon
-// --------------------------------
-import android.webkit.*
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.*
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.runtime.*
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import android.view.ViewGroup
 import android.webkit.*
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
+import site.salesmanpro.android.webbridge.WebAppInterface
 
 /**
  * Neo-Brutalist Shadow Extension
@@ -88,6 +58,8 @@ fun MainWebViewScreen(
     val context = LocalContext.current
     var isLoading by remember { mutableStateOf(true) }
 
+    var canGoBack by remember { mutableStateOf(false) }
+
     var loadProgress by remember { mutableIntStateOf(0) }
     val baseUrl = "https://salesmanpro.site"
     val dashboardUrl = "$baseUrl/dashboards"
@@ -98,8 +70,10 @@ fun MainWebViewScreen(
     val desktopUA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
     val appSpecificUA = "$defaultUA SalesmanProAndroid"
 
-    BackHandler(enabled = webView?.canGoBack() == true) {
-        webView?.goBack()
+    BackHandler {
+        if (canGoBack) {
+            webView?.goBack()
+        }
     }
 
 //    var webView by remember { mutableStateOf<WebView?>(null) }
@@ -248,6 +222,9 @@ fun MainWebViewScreen(
 
                             override fun onPageFinished(view: WebView, url: String) {
                                 super.onPageFinished(view, url)
+
+                                canGoBack = view.canGoBack()
+
                                 isRefreshing = false // Stop the spinner
                                 errorMessage = null   // Clear errors on success
 
