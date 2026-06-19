@@ -26,7 +26,9 @@ import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.webkit.WebView
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 // Import your service (adjust if the folder path is different)
@@ -41,6 +43,8 @@ import site.salesmanpro.android.webbridge.WebAppInterface
 class MainActivity : ComponentActivity() {
     // Use a state to track the deep link
     private var deepLinkUri by mutableStateOf<Uri?>(null)
+    private var filePickerCallback: ((Array<Uri>) -> Unit)? = null
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,6 +55,7 @@ class MainActivity : ComponentActivity() {
         val viewModel = BluetoothViewModel()
         val prefs = getSharedPreferences("SalesmanPrefs", MODE_PRIVATE)
 
+        WebView.setWebContentsDebuggingEnabled(false)
 
         setContent {
             var showScanner by remember { mutableStateOf(false) }
@@ -72,6 +77,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            val filePickerLauncher =
+                rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenMultipleDocuments()
+                ) { uris ->
+                    filePickerCallback?.invoke(uris.toTypedArray())
+                    filePickerCallback = null
+                }
 
             Box(modifier = Modifier.fillMaxSize()) { // Ensure the container is also full screen
 
@@ -81,6 +93,10 @@ class MainActivity : ComponentActivity() {
                     webInterface = WebAppInterface(printerService) {
                         prefs.getString("printer_mac", "") ?: ""
                     },
+                    onPickFiles = { mimeTypes, callback ->
+                        filePickerCallback = callback
+                        filePickerLauncher.launch(mimeTypes)
+                    }
 //                            webInterface = WebAppInterface(this),
 //                    deepLinkData = deepLinkUri
                 )
