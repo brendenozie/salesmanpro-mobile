@@ -1,154 +1,299 @@
 package site.salesmanpro.android
 
-import android.os.Bundle
-import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-// --- Added missing UI imports ---
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.material3.Icon
-// --------------------------------
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-// ------------------------------------
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
 import android.webkit.WebView
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.Composable
+import android.widget.Toast
+import androidx.fragment.app.FragmentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-
-// Import your service (adjust if the folder path is different)
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import site.salesmanpro.android.data.api.ApiService
+import site.salesmanpro.android.data.api.SessionValidationStatus
+import site.salesmanpro.android.data.local.OfflineDatabaseHelper
+import site.salesmanpro.android.data.models.AppSession
+import site.salesmanpro.android.data.preferences.SessionManager
+import site.salesmanpro.android.hardware.UnifiedPrinterManager
 import site.salesmanpro.android.hardware.bluetooth.BluetoothPrinterService
-import site.salesmanpro.android.ui.screens.BluetoothScannerScreen
+import site.salesmanpro.android.hardware.biometrics.BiometricAuthManager
+import site.salesmanpro.android.hardware.nfc.NfcReaderManager
+import site.salesmanpro.android.ui.screens.LoginScreen
 import site.salesmanpro.android.ui.screens.MainWebViewScreen
-//import site.salesmanpro.android.ui.screens.MainWebViewScreen
 import site.salesmanpro.android.ui.viewmodels.BluetoothViewModel
 import site.salesmanpro.android.webbridge.WebAppInterface
 
-
-class MainActivity : ComponentActivity() {
-    // Use a state to track the deep link
+class MainActivity : FragmentActivity() {
     private var deepLinkUri by mutableStateOf<Uri?>(null)
     private var filePickerCallback: ((Array<Uri>) -> Unit)? = null
-
+    private var micPermissionCallback: ((Boolean) -> Unit)? = null
+    private var nfcManager: NfcReaderManager? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIntent(intent)
 
-        // 1. Initialize the Printer Service (This was the missing reference)
-        val printerService = BluetoothPrinterService(this)
+        val sessionManager = SessionManager(this)
+        val apiService = ApiService()
+        val offlineDb = OfflineDatabaseHelper(this)
+        val bluetoothPrinterService = BluetoothPrinterService(this)
+        val unifiedPrinterManager = UnifiedPrinterManager(this, sessionManager, bluetoothPrinterService, offlineDb)
+        val webAppInterface = WebAppInterface(unifiedPrinterManager, offlineDb)
 
-        val viewModel = BluetoothViewModel()
-        val prefs = getSharedPreferences("SalesmanPrefs", MODE_PRIVATE)
+        val biometricManager = BiometricAuthManager(this)
+        val nfc = NfcReaderManager(this)
+        nfcManager = nfc
+
+        nfc.onTagScannedListener = { cardUid ->
+            webAppInterface.dispatchNfcScanned(cardUid)
+        }
+
+        webAppInterface.onStartNfc = {
+            nfc.startListening()
+        }
+
+        webAppInterface.onStopNfc = {
+            nfc.stopListening()
+        }
+
+        webAppInterface.onTriggerBiometric = { title, subtitle ->
+            if (biometricManager.canAuthenticate()) {
+                biometricManager.promptBiometricAuth(
+                    title = title,
+                    subtitle = subtitle,
+                    onSuccess = {
+                        webAppInterface.dispatchBiometricResult(true)
+                    },
+                    onError = { _, err ->
+                        webAppInterface.dispatchBiometricResult(false, err.toString())
+                    },
+                    onFailed = {
+                        webAppInterface.dispatchBiometricResult(false, "Biometric verification failed")
+                    }
+                )
+            } else {
+                webAppInterface.dispatchBiometricResult(
+                    false,
+                    "Biometric authentication not enrolled or unavailable"
+                )
+            }
+        }
+
+        val bluetoothViewModel = BluetoothViewModel()
 
         WebView.setWebContentsDebuggingEnabled(false)
 
         setContent {
+            var currentSession by remember { mutableStateOf<AppSession?>(sessionManager.getSession()) }
+            webAppInterface.onLogout = {
+                sessionManager.clearSession()
+                currentSession = null
+            }
+            var isCheckingSession by remember { mutableStateOf(currentSession != null) }
             var showScanner by remember { mutableStateOf(false) }
 
             val context = LocalContext.current
 
-            // 1. Change to RequestMultiplePermissions
-            val permissionLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestMultiplePermissions()
-            ) { permissions ->
-                // Check if BLUETOOTH_CONNECT was granted (SCAN is helpful but technically secondary if you already have the MAC)
-                val isConnectGranted = permissions[Manifest.permission.BLUETOOTH_CONNECT] == true
-
-                if (isConnectGranted) {
-                    viewModel.fetchPairedDevices(context)
-                    showScanner = true
-                } else {
-                    Toast.makeText(context, "Bluetooth permission denied", Toast.LENGTH_SHORT).show()
+            // Handle incoming deep link from Google OAuth or central handover
+            LaunchedEffect(deepLinkUri) {
+                val uri = deepLinkUri ?: return@LaunchedEffect
+                if (uri.scheme == "salesmanpro" && uri.host == "callback") {
+                    val token = uri.getQueryParameter("token")
+                    val destination = uri.getQueryParameter("destination")
+                    if (!token.isNullOrEmpty()) {
+                        isCheckingSession = true
+                        val exchangeResult = apiService.exchangeHandoverToken(token)
+                        exchangeResult.onSuccess { session ->
+                            val finalSession = if (!destination.isNullOrEmpty()) {
+                                session.copy(destination = destination)
+                            } else {
+                                session
+                            }
+                            sessionManager.saveSession(finalSession)
+                            currentSession = finalSession
+                            Toast.makeText(context, "Welcome, ${finalSession.user.name}", Toast.LENGTH_SHORT).show()
+                        }.onFailure { err ->
+                            Toast.makeText(context, "Sign-in failed: ${err.message}", Toast.LENGTH_LONG).show()
+                        }
+                        isCheckingSession = false
+                        deepLinkUri = null
+                    }
                 }
             }
 
-            val filePickerLauncher =
-                rememberLauncherForActivityResult(
-                    ActivityResultContracts.OpenMultipleDocuments()
-                ) { uris ->
-                    filePickerCallback?.invoke(uris.toTypedArray())
-                    filePickerCallback = null
-                }
-
-            Box(modifier = Modifier.fillMaxSize()) { // Ensure the container is also full screen
-
-                // Background: The Web App
-                MainWebViewScreen(
-//                    url = "https://salesmanpro.site",
-                    webInterface = WebAppInterface(printerService) {
-                        prefs.getString("printer_mac", "") ?: ""
-                    },
-                    onPickFiles = { mimeTypes, callback ->
-                        filePickerCallback = callback
-                        filePickerLauncher.launch(mimeTypes)
-                    }
-//                            webInterface = WebAppInterface(this),
-//                    deepLinkData = deepLinkUri
-                )
-
-                // Floating Action Button to open settings
-                FloatingActionButton(
-                    onClick = {
-                        // For Android 12 (API 31) and above, check for BLUETOOTH_CONNECT
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            // Ask for BOTH modern permissions
-                            permissionLauncher.launch(
-                                arrayOf(
-                                    Manifest.permission.BLUETOOTH_CONNECT,
-                                    Manifest.permission.BLUETOOTH_SCAN
-                                )
-                            )
-                        } else {
-                            viewModel.fetchPairedDevices(context)
-                            showScanner = true
+            // Validate existing session on launch (preserving offline session when network is unreachable)
+            LaunchedEffect(Unit) {
+                if (deepLinkUri == null) {
+                    currentSession?.let { session ->
+                        val status = apiService.validateSessionStatus(
+                            token = session.token,
+                            companyId = session.company.id,
+                            storeId = session.activeStoreId,
+                            deviceId = session.device.deviceId
+                        )
+                        when (status) {
+                            is SessionValidationStatus.Valid -> {
+                                val refreshed = status.session
+                                val merged = if (session.destination != null && refreshed.destination == null) {
+                                    refreshed.copy(destination = session.destination)
+                                } else {
+                                    refreshed
+                                }
+                                sessionManager.saveSession(merged)
+                                currentSession = merged
+                            }
+                            is SessionValidationStatus.Unauthorized -> {
+                                // Definitive 401/403 (token expired or device revoked by manager)
+                                sessionManager.clearSession()
+                                currentSession = null
+                                Toast.makeText(context, status.reason, Toast.LENGTH_LONG).show()
+                            }
+                            is SessionValidationStatus.OfflineUnreachable -> {
+                                // Offline or transient network drop: preserve session if offline grant is still valid
+                                if (session.isOfflineGrantValid()) {
+                                    currentSession = session
+                                    Toast.makeText(
+                                        context,
+                                        "Offline mode active — Workspace opened from local store.",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    sessionManager.clearSession()
+                                    currentSession = null
+                                    Toast.makeText(
+                                        context,
+                                        "Offline authorization grant expired. Please connect to the internet to renew.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
                         }
-//                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-//                            permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
-//                        } else {
-//                            // Older versions don't need runtime connect permission
-//                            viewModel.fetchPairedDevices(context)
-//                            showScanner = true
-//                        }
+                        isCheckingSession = false
+                    }
+                }
+            }
 
-                    },
+            val permissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { permissions ->
+                val isConnectGranted = permissions[Manifest.permission.BLUETOOTH_CONNECT] == true
+                if (isConnectGranted) {
+                    bluetoothViewModel.fetchPairedDevices(context)
+                }
+            }
+
+            LaunchedEffect(Unit) {
+                val neededPermissions = mutableListOf(Manifest.permission.CAMERA)
+                if (sessionManager.isMicrophoneEnabled()) {
+                    neededPermissions.add(Manifest.permission.RECORD_AUDIO)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    neededPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+                    neededPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+                } else {
+                    neededPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+                }
+                permissionLauncher.launch(neededPermissions.toTypedArray())
+            }
+
+            val micPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                micPermissionCallback?.invoke(granted)
+                micPermissionCallback = null
+            }
+
+            val filePickerLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenMultipleDocuments()
+            ) { uris ->
+                filePickerCallback?.invoke(uris.toTypedArray())
+                filePickerCallback = null
+            }
+
+            if (isCheckingSession) {
+                // Splash loading screen
+                Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp).padding(bottom = 56.dp)
+                        .fillMaxSize()
+                        .background(Color(0xFF0F172A)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Printer Settings"
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Color(0xFF38BDF8))
+                        Spacer(Modifier.height(16.dp))
+                        Text("Opening SalesmanPro Workspace...", color = Color.White, fontSize = 14.sp)
+                    }
+                }
+            } else if (currentSession == null) {
+                // Native Direct Login
+                LoginScreen(
+                    sessionManager = sessionManager,
+                    apiService = apiService,
+                    onLoginSuccess = { session ->
+                        currentSession = session
+                    }
+                )
+            } else {
+                // Authenticated Session -> Load Role-Specific Authorized Workspace
+                val session = currentSession!!
+                val slug = session.company.slug?.ifEmpty { "admin" } ?: "admin"
+                val storeId = session.activeStoreId
+                val deviceId = session.device.deviceId
+
+                val roleDestination = session.destination?.ifEmpty { null }
+                val targetPath = if (!roleDestination.isNullOrEmpty()) {
+                    roleDestination
+                } else if (session.user.role == "STAFF" || session.user.role == "CASHIER") {
+                    "/admin/$slug/storepos?storeId=$storeId&deviceId=$deviceId"
+                } else if (session.user.role == "SUPER_ADMIN") {
+                    "/super-admin"
+                } else if (session.user.role == "AGENT") {
+                    "/agents"
+                } else {
+                    "/admin/$slug"
                 }
 
-                if (showScanner) {
-                    BluetoothScannerScreen(
-                        devices = viewModel.pairedDevices,
-                        onDeviceSelected = { device ->
-                            prefs.edit().putString("printer_mac", device.address).apply()
-                            showScanner = false
-                            Toast.makeText(
-                                this@MainActivity,
-                                "Linked to ${device.name}",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                val fullUrl = if (targetPath.startsWith("http")) targetPath else "https://salesmanpro.store$targetPath"
+                val encodedTarget = java.net.URLEncoder.encode(fullUrl, "UTF-8")
+                val tokenToUse = session.handoverToken?.ifEmpty { null } ?: session.token
+                val finalWebUrl = "https://salesmanpro.store/api/auth/handover?token=$tokenToUse&target=$encodedTarget&platform=ANDROID"
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    MainWebViewScreen(
+                        url = finalWebUrl,
+                        directFallbackUrl = fullUrl,
+                        webInterface = webAppInterface,
+                        microphoneEnabled = sessionManager.isMicrophoneEnabled(),
+                        onToggleMicrophone = { enabled ->
+                            sessionManager.setMicrophoneEnabled(enabled)
                         },
-                        onDismiss = { showScanner = false }
+                        onRequestMicrophonePermission = { callback ->
+                            micPermissionCallback = callback
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        onOpenAppSettings = {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", packageName, null)
+                            }
+                            startActivity(intent)
+                        },
+                        onPickFiles = { mimeTypes, callback ->
+                            filePickerCallback = callback
+                            filePickerLauncher.launch(mimeTypes)
+                        }
                     )
                 }
             }
@@ -160,8 +305,13 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onPause() {
+        super.onPause()
+        nfcManager?.stopListening()
+    }
+
     private fun handleIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_VIEW) {
+        if (intent?.action == Intent.ACTION_VIEW && intent.data != null) {
             deepLinkUri = intent.data
         }
     }

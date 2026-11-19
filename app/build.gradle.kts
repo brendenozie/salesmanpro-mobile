@@ -57,5 +57,6 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.browser)
     implementation(libs.play.services.auth)
+    implementation("androidx.biometric:biometric:1.2.0-alpha05")
     implementation("com.google.code.gson:gson:2.10.1")
 }
