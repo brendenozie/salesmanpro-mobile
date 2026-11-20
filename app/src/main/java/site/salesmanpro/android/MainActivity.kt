@@ -1,10 +1,14 @@
 package site.salesmanpro.android
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.webkit.WebView
 import android.widget.Toast
@@ -41,6 +45,8 @@ class MainActivity : FragmentActivity() {
     private var filePickerCallback: ((Array<Uri>) -> Unit)? = null
     private var micPermissionCallback: ((Boolean) -> Unit)? = null
     private var nfcManager: NfcReaderManager? = null
+    private var activeWebAppInterface: WebAppInterface? = null
+    private var deviceStateReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +58,35 @@ class MainActivity : FragmentActivity() {
         val bluetoothPrinterService = BluetoothPrinterService(this)
         val unifiedPrinterManager = UnifiedPrinterManager(this, sessionManager, bluetoothPrinterService, offlineDb)
         val webAppInterface = WebAppInterface(unifiedPrinterManager, offlineDb)
+        activeWebAppInterface = webAppInterface
+
+        // Phase 14: Observe screen lock & Battery Saver changes so Selly immediately releases mic
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> webAppInterface.dispatchAndroidLifecycle("screen_locked")
+                    Intent.ACTION_USER_PRESENT -> webAppInterface.dispatchAndroidLifecycle("screen_unlocked")
+                    PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                        val isPowerSave = pm?.isPowerSaveMode == true
+                        webAppInterface.dispatchAndroidLifecycle(
+                            if (isPowerSave) "battery_saver_on" else "battery_saver_off"
+                        )
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+            addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+        deviceStateReceiver = receiver
 
         val biometricManager = BiometricAuthManager(this)
         val nfc = NfcReaderManager(this)
@@ -195,11 +230,10 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
+            // Phase 14: Never eagerly request RECORD_AUDIO on app launch.
+            // Microphone permission is requested ONLY when the user explicitly activates voice.
             LaunchedEffect(Unit) {
                 val neededPermissions = mutableListOf(Manifest.permission.CAMERA)
-                if (sessionManager.isMicrophoneEnabled()) {
-                    neededPermissions.add(Manifest.permission.RECORD_AUDIO)
-                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     neededPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
                     neededPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
@@ -279,6 +313,9 @@ class MainActivity : FragmentActivity() {
                         microphoneEnabled = sessionManager.isMicrophoneEnabled(),
                         onToggleMicrophone = { enabled ->
                             sessionManager.setMicrophoneEnabled(enabled)
+                            if (!enabled) {
+                                webAppInterface.dispatchAndroidLifecycle("mic_revoked")
+                            }
                         },
                         onRequestMicrophonePermission = { callback ->
                             micPermissionCallback = callback
@@ -308,6 +345,28 @@ class MainActivity : FragmentActivity() {
     override fun onPause() {
         super.onPause()
         nfcManager?.stopListening()
+        // Phase 14: Respect Android 14-16 background mic restrictions — release mic immediately on background
+        activeWebAppInterface?.dispatchAndroidLifecycle("backgrounded")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm?.isPowerSaveMode == true) {
+            activeWebAppInterface?.dispatchAndroidLifecycle("battery_saver_on")
+        } else {
+            activeWebAppInterface?.dispatchAndroidLifecycle("foregrounded")
+        }
+    }
+
+    override fun onDestroy() {
+        deviceStateReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {}
+        }
+        deviceStateReceiver = null
+        super.onDestroy()
     }
 
     private fun handleIntent(intent: Intent?) {

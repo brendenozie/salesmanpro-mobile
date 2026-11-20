@@ -166,6 +166,10 @@ class WebAppInterface(
                 val title = payloadObj?.get("title") as? String ?: "SalesmanPro Alert"
                 val message = payloadObj?.get("message") as? String ?: ""
                 Log.d("WebAppInterface", "Displaying native Android notification: $title - $message")
+            } else if (msgType == "VOICE_STATE_CHANGED") {
+                val voiceState = root["state"] as? String ?: "OFF"
+                val micActive = root["micActive"] as? Boolean ?: false
+                Log.d("WebAppInterface", "Selly voice state changed: state=$voiceState micActive=$micActive")
             }
         } catch (e: Exception) {
             Log.e("WebAppInterface", "Error parsing postMessage: ${e.message}", e)
@@ -237,6 +241,19 @@ class WebAppInterface(
             val js = "window.dispatchEvent(new CustomEvent('SalesmanProBiometricResult', { detail: { success: $success, error: $errVal } }));"
             webViewGetter?.invoke()?.evaluateJavascript(js, null)
         }
+    }
+
+    fun dispatchAndroidLifecycle(event: String) {
+        scope.launch {
+            val safeEvent = event.replace("'", "")
+            val js = "window.dispatchEvent(new CustomEvent('SalesmanProAndroidLifecycle', { detail: { event: '$safeEvent' } }));"
+            webViewGetter?.invoke()?.evaluateJavascript(js, null)
+        }
+    }
+
+    @JavascriptInterface
+    fun getVoiceCapabilities(): String {
+        return """{"platform":"ANDROID","targetSdk":36,"supportsBackgroundMic":false,"supportsForegroundLocalStandby":true}"""
     }
 
     @JavascriptInterface
